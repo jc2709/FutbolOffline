@@ -32,6 +32,7 @@ public class GameView extends View {
     private long lastFrameNanos = 0L;
 
     private int joystickPointerId = -1;
+    private float rivalKickCooldown = 0f;
 
     public GameView(Context context) {
         super(context);
@@ -77,6 +78,7 @@ public class GameView extends View {
         ballY = h * 0.50f;
         ballVX = 0f;
         ballVY = 0f;
+        rivalKickCooldown = 0.35f;
     }
 
     private void restartMatch() {
@@ -123,6 +125,8 @@ public class GameView extends View {
             return;
         }
 
+        rivalKickCooldown = Math.max(0f, rivalKickCooldown - dt);
+
         float playerSpeed = Math.min(w, h) * 0.55f;
         playerX += joystickDX * playerSpeed * dt;
         playerY += joystickDY * playerSpeed * dt;
@@ -147,13 +151,26 @@ public class GameView extends View {
         keeperLeftY = clamp(keeperLeftY, goalTop + playerRadius, goalBottom - playerRadius);
         keeperRightY = clamp(keeperRightY, goalTop + playerRadius, goalBottom - playerRadius);
 
-        // Empuje al conducir la pelota.
-        resolveDribble(playerX, playerY, true);
-        resolveDribble(rivalX, rivalY, false);
+        // Si el jugador entra con movimiento contra el rival, puede robar la pelota.
+        boolean playerWonChallenge = resolvePlayerChallenge();
 
-        // El rival dispara automáticamente si está suficientemente cerca.
-        if (distance(rivalX, rivalY, ballX, ballY) < playerRadius + ballRadius + 8f) {
+        // El rival se resuelve primero y el jugador después: en una disputa directa,
+        // el jugador ya no pierde la pelota automáticamente por el orden de colisiones.
+        if (!playerWonChallenge) {
+            resolveDribble(rivalX, rivalY, false);
+            resolveDribble(playerX, playerY, true);
+        }
+
+        // El rival ya no dispara en cada frame. Solo chuta si realmente tiene ventaja
+        // sobre el balón y respetando un pequeño cooldown.
+        float rivalBallDistance = distance(rivalX, rivalY, ballX, ballY);
+        float playerBallDistance = distance(playerX, playerY, ballX, ballY);
+        float touchRange = playerRadius + ballRadius + 8f;
+        if (rivalKickCooldown <= 0f &&
+                rivalBallDistance < touchRange &&
+                rivalBallDistance + playerRadius * 0.18f < playerBallDistance) {
             kickToward(fieldLeft - w * 0.05f, h * 0.50f, 1.0f);
+            rivalKickCooldown = 0.72f;
         }
 
         // Física básica de pelota.
@@ -163,26 +180,12 @@ public class GameView extends View {
         ballVX *= friction;
         ballVY *= friction;
 
-        // Rebote contra líneas laterales y de fondo fuera de la portería.
-        if (ballY - ballRadius < fieldTop) {
-            ballY = fieldTop + ballRadius;
-            ballVY = Math.abs(ballVY) * 0.72f;
-        } else if (ballY + ballRadius > fieldBottom) {
-            ballY = fieldBottom - ballRadius;
-            ballVY = -Math.abs(ballVY) * 0.72f;
-        }
-
-        if (ballX - ballRadius < fieldLeft && (ballY < goalTop || ballY > goalBottom)) {
-            ballX = fieldLeft + ballRadius;
-            ballVX = Math.abs(ballVX) * 0.72f;
-        }
-        if (ballX + ballRadius > fieldRight && (ballY < goalTop || ballY > goalBottom)) {
-            ballX = fieldRight - ballRadius;
-            ballVX = -Math.abs(ballVX) * 0.72f;
-        }
+        resolveBallBounds();
+        escapeCornerIfNeeded();
 
         resolveKeeperCollision(fieldLeft + playerRadius * 0.55f, keeperLeftY, true);
         resolveKeeperCollision(fieldRight - playerRadius * 0.55f, keeperRightY, false);
+        resolveBallBounds();
 
         // Gol del rival.
         if (ballX + ballRadius < fieldLeft && ballY >= goalTop && ballY <= goalBottom) {
@@ -198,6 +201,37 @@ public class GameView extends View {
         }
     }
 
+    private boolean resolvePlayerChallenge() {
+        float playerBallDistance = distance(playerX, playerY, ballX, ballY);
+        float rivalBallDistance = distance(rivalX, rivalY, ballX, ballY);
+        float playerRivalDistance = distance(playerX, playerY, rivalX, rivalY);
+        float inputLength = length(joystickDX, joystickDY);
+
+        boolean playerIsPressing = inputLength > 0.18f;
+        boolean closeToBall = playerBallDistance < playerRadius + ballRadius + playerRadius * 0.58f;
+        boolean rivalHasBall = rivalBallDistance < playerRadius + ballRadius + 10f;
+        boolean bodiesClose = playerRivalDistance < playerRadius * 2.15f;
+
+        if (!playerIsPressing || !closeToBall || !rivalHasBall || !bodiesClose) {
+            return false;
+        }
+
+        float nx = joystickDX / inputLength;
+        float ny = joystickDY / inputLength;
+        float minDist = playerRadius + ballRadius + 2f;
+
+        ballX = playerX + nx * minDist;
+        ballY = playerY + ny * minDist;
+
+        float stealSpeed = Math.min(w, h) * 0.42f;
+        ballVX = nx * stealSpeed;
+        ballVY = ny * stealSpeed;
+
+        constrainBallAfterContact();
+        rivalKickCooldown = 0.55f;
+        return true;
+    }
+
     private void resolveDribble(float px, float py, boolean isPlayer) {
         float dx = ballX - px;
         float dy = ballY - py;
@@ -208,9 +242,67 @@ public class GameView extends View {
             float ny = dy / dist;
             ballX = px + nx * minDist;
             ballY = py + ny * minDist;
-            float push = isPlayer ? 65f : 45f;
+
+            float scale = Math.min(w, h);
+            float push = isPlayer ? scale * 0.11f : scale * 0.075f;
             ballVX += nx * push;
             ballVY += ny * push;
+
+            // Evita que un jugador empuje físicamente la pelota "dentro" de una pared.
+            constrainBallAfterContact();
+        }
+    }
+
+    private void constrainBallAfterContact() {
+        ballY = clamp(ballY, fieldTop + ballRadius, fieldBottom - ballRadius);
+
+        boolean insideGoalMouth = ballY >= goalTop && ballY <= goalBottom;
+        if (!insideGoalMouth) {
+            ballX = clamp(ballX, fieldLeft + ballRadius, fieldRight - ballRadius);
+        }
+    }
+
+    private void resolveBallBounds() {
+        // Rebote contra líneas laterales.
+        if (ballY - ballRadius < fieldTop) {
+            ballY = fieldTop + ballRadius;
+            ballVY = Math.abs(ballVY) * 0.72f;
+        } else if (ballY + ballRadius > fieldBottom) {
+            ballY = fieldBottom - ballRadius;
+            ballVY = -Math.abs(ballVY) * 0.72f;
+        }
+
+        // Líneas de fondo: dejamos pasar la pelota únicamente por la portería.
+        if (ballX - ballRadius < fieldLeft && (ballY < goalTop || ballY > goalBottom)) {
+            ballX = fieldLeft + ballRadius;
+            ballVX = Math.abs(ballVX) * 0.72f;
+        }
+        if (ballX + ballRadius > fieldRight && (ballY < goalTop || ballY > goalBottom)) {
+            ballX = fieldRight - ballRadius;
+            ballVX = -Math.abs(ballVX) * 0.72f;
+        }
+    }
+
+    private void escapeCornerIfNeeded() {
+        float margin = ballRadius * 1.35f;
+        boolean nearLeft = ballX <= fieldLeft + ballRadius + margin;
+        boolean nearRight = ballX >= fieldRight - ballRadius - margin;
+        boolean nearTop = ballY <= fieldTop + ballRadius + margin;
+        boolean nearBottom = ballY >= fieldBottom - ballRadius - margin;
+        boolean inCorner = (nearLeft || nearRight) && (nearTop || nearBottom);
+
+        float speed = length(ballVX, ballVY);
+        float slowSpeed = Math.min(w, h) * 0.13f;
+
+        if (inCorner && speed < slowSpeed) {
+            float escapeSpeed = Math.min(w, h) * 0.25f;
+            ballVX = (nearLeft ? 1f : -1f) * escapeSpeed;
+            ballVY = (nearTop ? 1f : -1f) * escapeSpeed * 0.72f;
+
+            // Unos píxeles hacia dentro eliminan la oscilación pared-jugador-pared.
+            float inset = ballRadius * 0.25f;
+            ballX += nearLeft ? inset : -inset;
+            ballY += nearTop ? inset : -inset;
         }
     }
 
