@@ -4,31 +4,35 @@ Juego de fútbol 2D para Android pensado para funcionar completamente **sin inte
 
 ## Controles
 - **Joystick táctil**: mover al jugador controlado.
-- **TIRO**: disparar al arco cuando tienes la pelota o estás muy cerca de ella.
-- **PASE**: enviar la pelota a un compañero. Cuando el compañero recibe el pase, el control cambia automáticamente a ese jugador.
-- **FUERZA**: empujar al rival cercano. Si tenía la pelota, puede perderla y queda desestabilizado durante un instante. El botón tiene cooldown para evitar uso continuo.
+- **TIRO / DESPEJE**: en la mitad rival funciona como tiro al arco; en tu propia mitad funciona como despeje fuerte hacia adelante.
+- **PASE**: envía la pelota a un compañero aunque esté separado. El receptor corre hacia la trayectoria del balón y, cuando controla el pase, el control cambia automáticamente a él.
 
 ## Posesión y juego
 - Cuando un jugador obtiene la posesión, la pelota queda delante de él y se mueve con su conducción.
-- La pelota se suelta al tirar, pasar, recibir una entrada o perder la posesión.
-- Los compañeros se colocan de forma automática y pueden ir a buscar balones divididos.
-- Los rivales tienen IA básica para presionar, conducir hacia tu arco y disparar.
+- Llevar la pelota reduce la velocidad del portador al 78% de su velocidad normal.
+- Jugadores propios y rivales comparten la misma velocidad base.
+- Ya no existe un botón de fuerza: los choques físicos entre rivales separan a los jugadores y pueden provocar que el portador pierda la pelota.
+- Existe una protección breve después de obtener la posesión para evitar pérdidas instantáneas y rebotes infinitos de balón.
+- Los compañeros se posicionan automáticamente y el receptor seleccionado persigue la trayectoria de un pase.
+- La IA rival orienta al portador hacia tu arco al recibir la pelota, incluso si la recibe de espaldas, y avanza antes de decidir el disparo.
 - El jugador controlado se marca con un aro blanco.
 
 ## Configuración del partido
 Antes de jugar aparece un menú donde puedes modificar:
 - **Tiempo**: entre 30 y 300 segundos, en pasos de 30 segundos.
-- **Prórroga**: si hay empate, añade un tiempo extra de al menos 30 segundos.
-- **Gol de oro**: el primer gol durante la fase de gol de oro termina el partido. Si activas prórroga y gol de oro, el primer gol de la prórroga decide el partido.
+- **Prórroga**: si hay empate, añade tiempo extra.
+- **Gol de oro**: el siguiente gol decide el partido. Si activas prórroga y gol de oro, el primer gol de la prórroga termina el encuentro.
 - **Jugadores de campo**: de 1 a 5 por equipo. Los arqueros son automáticos y no cuentan dentro de ese límite.
 
 ## Incluye
 - Hasta 5 jugadores de campo por equipo.
 - Arqueros automáticos.
 - Posesión y conducción de balón.
-- Pase y cambio automático de jugador receptor.
-- Acción de fuerza/desestabilización.
-- IA rival básica.
+- Pase con receptor automático y cambio de jugador.
+- Choques y pérdida de posesión por contacto.
+- Tiro en campo rival y despeje en campo propio.
+- Velocidad equilibrada entre ambos equipos y penalización al conducir.
+- IA rival básica con corrección de orientación al recibir.
 - Física simple de pelota y protección contra atascos en las esquinas.
 - Detección de goles, marcador, cronómetro, prórroga y gol de oro.
 - Funcionamiento offline, sin cuentas ni servidor.
