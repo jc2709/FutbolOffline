@@ -31,7 +31,6 @@ public class GameView extends View {
     private final float[] rivalY = new float[MAX_PLAYERS];
     private final float[] rivalFacingX = new float[MAX_PLAYERS];
     private final float[] rivalFacingY = new float[MAX_PLAYERS];
-    private final float[] rivalStun = new float[MAX_PLAYERS];
 
     private float keeperLeftY, keeperRightY;
     private float ballX, ballY, ballVX, ballVY;
@@ -43,18 +42,15 @@ public class GameView extends View {
     private float joystickDX, joystickDY;
     private float shootCX, shootCY, actionRadius;
     private float passCX, passCY;
-    private float forceCX, forceCY;
     private int joystickPointerId = -1;
 
     private ScreenState state = ScreenState.MENU;
 
-    // Configuración del menú.
     private int configuredMatchSeconds = 90;
     private boolean extraTimeEnabled = false;
     private boolean goldenGoalEnabled = false;
     private int configuredTeamSize = 1;
 
-    // Estado del partido.
     private int teamSize = 1;
     private int playerScore = 0;
     private int rivalScore = 0;
@@ -63,18 +59,19 @@ public class GameView extends View {
     private boolean goldenGoalPhase = false;
     private String phaseLabel = "TIEMPO";
     private float rivalKickCooldown = 0f;
-    private float forceCooldown = 0f;
+    private float possessionGrace = 0f;
+    private float collisionCooldown = 0f;
     private long lastFrameNanos = 0L;
 
-    private RectF timeMinusRect = new RectF();
-    private RectF timePlusRect = new RectF();
-    private RectF playersMinusRect = new RectF();
-    private RectF playersPlusRect = new RectF();
-    private RectF extraRect = new RectF();
-    private RectF goldenRect = new RectF();
-    private RectF startRect = new RectF();
-    private RectF restartRect = new RectF();
-    private RectF menuRect = new RectF();
+    private final RectF timeMinusRect = new RectF();
+    private final RectF timePlusRect = new RectF();
+    private final RectF playersMinusRect = new RectF();
+    private final RectF playersPlusRect = new RectF();
+    private final RectF extraRect = new RectF();
+    private final RectF goldenRect = new RectF();
+    private final RectF startRect = new RectF();
+    private final RectF restartRect = new RectF();
+    private final RectF menuRect = new RectF();
 
     public GameView(Context context) {
         super(context);
@@ -102,13 +99,11 @@ public class GameView extends View {
         joystickCY = h * 0.79f;
         joystickRadius = Math.min(w, h) * 0.105f;
 
-        actionRadius = Math.min(w, h) * 0.060f;
+        actionRadius = Math.min(w, h) * 0.066f;
         shootCX = w * 0.88f;
-        shootCY = h * 0.76f;
-        passCX = w * 0.76f;
-        passCY = h * 0.84f;
-        forceCX = w * 0.88f;
-        forceCY = h * 0.89f;
+        shootCY = h * 0.79f;
+        passCX = w * 0.75f;
+        passCY = h * 0.86f;
 
         layoutMenuRects();
         resetPositions();
@@ -122,15 +117,11 @@ public class GameView extends View {
 
         timeMinusRect.set(cx - rowW / 2f, h * 0.30f, cx - rowW / 2f + buttonW, h * 0.30f + rowH);
         timePlusRect.set(cx + rowW / 2f - buttonW, h * 0.30f, cx + rowW / 2f, h * 0.30f + rowH);
-
         extraRect.set(cx - rowW / 2f, h * 0.42f, cx + rowW / 2f, h * 0.42f + rowH);
         goldenRect.set(cx - rowW / 2f, h * 0.53f, cx + rowW / 2f, h * 0.53f + rowH);
-
         playersMinusRect.set(cx - rowW / 2f, h * 0.64f, cx - rowW / 2f + buttonW, h * 0.64f + rowH);
         playersPlusRect.set(cx + rowW / 2f - buttonW, h * 0.64f, cx + rowW / 2f, h * 0.64f + rowH);
-
         startRect.set(cx - w * 0.17f, h * 0.78f, cx + w * 0.17f, h * 0.88f);
-
         restartRect.set(cx - w * 0.21f, h * 0.61f, cx - w * 0.01f, h * 0.72f);
         menuRect.set(cx + w * 0.01f, h * 0.61f, cx + w * 0.21f, h * 0.72f);
     }
@@ -171,12 +162,10 @@ public class GameView extends View {
             rivalY[i] = h * lanes[i];
             rivalFacingX[i] = -1f;
             rivalFacingY[i] = 0f;
-            rivalStun[i] = 0f;
         }
 
         keeperLeftY = h * 0.50f;
         keeperRightY = h * 0.50f;
-
         ballX = w * 0.50f;
         ballY = h * 0.50f;
         ballVX = 0f;
@@ -184,7 +173,8 @@ public class GameView extends View {
         ballOwner = FREE_BALL;
         pendingPassTarget = -1;
         rivalKickCooldown = 0.35f;
-        forceCooldown = 0f;
+        possessionGrace = 0f;
+        collisionCooldown = 0f;
         joystickDX = 0f;
         joystickDY = 0f;
         joystickPointerId = -1;
@@ -223,10 +213,8 @@ public class GameView extends View {
 
     private void update(float dt) {
         rivalKickCooldown = Math.max(0f, rivalKickCooldown - dt);
-        forceCooldown = Math.max(0f, forceCooldown - dt);
-        for (int i = 0; i < teamSize; i++) {
-            rivalStun[i] = Math.max(0f, rivalStun[i] - dt);
-        }
+        possessionGrace = Math.max(0f, possessionGrace - dt);
+        collisionCooldown = Math.max(0f, collisionCooldown - dt);
 
         updateClock(dt);
         if (state != ScreenState.PLAYING) return;
@@ -234,6 +222,7 @@ public class GameView extends View {
         updateControlledPlayer(dt);
         updateTeammates(dt);
         updateRivals(dt);
+        resolveOpposingPlayerCollisions();
         updateKeepers(dt);
 
         if (ballOwner != FREE_BALL) {
@@ -243,18 +232,12 @@ public class GameView extends View {
             tryAcquirePossession();
         }
 
-        if (ballOwner >= RIVAL_OWNER_OFFSET) {
-            rivalWithBallBehavior(dt);
-        }
-
+        rivalWithBallBehavior();
         checkGoals();
     }
 
     private void updateClock(float dt) {
-        if (goldenGoalPhase) {
-            // Gol de oro sin reloj: el próximo gol termina el partido.
-            return;
-        }
+        if (goldenGoalPhase) return;
 
         matchTime -= dt;
         if (matchTime > 0f) return;
@@ -264,6 +247,7 @@ public class GameView extends View {
             inExtraTime = true;
             phaseLabel = goldenGoalEnabled ? "PRÓRROGA · GOL DE ORO" : "PRÓRROGA";
             matchTime = Math.max(30f, configuredMatchSeconds / 3f);
+            if (goldenGoalEnabled) goldenGoalPhase = true;
             return;
         }
 
@@ -276,10 +260,18 @@ public class GameView extends View {
         state = ScreenState.GAME_OVER;
     }
 
+    private float basePlayerSpeed() {
+        return Math.min(w, h) * 0.40f;
+    }
+
+    private float speedForOwner(int ownerId) {
+        return basePlayerSpeed() * (ballOwner == ownerId ? 0.78f : 1f);
+    }
+
     private void updateControlledPlayer(float dt) {
-        float input = length(joystickDX, joystickDY);
-        float speed = Math.min(w, h) * 0.52f;
         int i = controlledIndex;
+        float input = length(joystickDX, joystickDY);
+        float speed = speedForOwner(i);
 
         teamX[i] += joystickDX * speed * dt;
         teamY[i] += joystickDY * speed * dt;
@@ -298,7 +290,11 @@ public class GameView extends View {
             float targetX;
             float targetY;
 
-            if (ballOwner == FREE_BALL && isClosestTeamToBall(i)) {
+            if (ballOwner == FREE_BALL && pendingPassTarget == i) {
+                float leadTime = 0.18f;
+                targetX = ballX + ballVX * leadTime;
+                targetY = ballY + ballVY * leadTime;
+            } else if (ballOwner == FREE_BALL && isClosestTeamToBall(i)) {
                 targetX = ballX;
                 targetY = ballY;
             } else {
@@ -307,7 +303,7 @@ public class GameView extends View {
                 targetY = formation[1];
             }
 
-            moveTeamPlayerToward(i, targetX, targetY, Math.min(w, h) * 0.25f * dt);
+            moveTeamPlayerToward(i, targetX, targetY, speedForOwner(i) * dt);
         }
     }
 
@@ -315,14 +311,14 @@ public class GameView extends View {
         int chaser = findClosestRivalToBallOrOwner();
 
         for (int i = 0; i < teamSize; i++) {
-            if (rivalStun[i] > 0f) continue;
-
             float targetX;
             float targetY;
+            int ownerId = RIVAL_OWNER_OFFSET + i;
 
-            if (ballOwner == RIVAL_OWNER_OFFSET + i) {
-                targetX = fieldLeft + w * 0.10f;
-                targetY = h * 0.50f;
+            if (ballOwner == ownerId) {
+                targetX = fieldLeft + playerRadius * 2.8f;
+                targetY = clamp(h * 0.50f + (rivalY[i] - h * 0.50f) * 0.28f,
+                        goalTop + playerRadius, goalBottom - playerRadius);
             } else if (i == chaser) {
                 if (ballOwner >= 0 && ballOwner < RIVAL_OWNER_OFFSET) {
                     targetX = teamX[ballOwner];
@@ -337,26 +333,69 @@ public class GameView extends View {
                 targetY = formation[1];
             }
 
-            moveRivalToward(i, targetX, targetY, Math.min(w, h) * 0.27f * dt);
+            moveRivalToward(i, targetX, targetY, speedForOwner(ownerId) * dt);
         }
+    }
 
-        // Un rival que alcanza al portador puede hacer que el balón quede dividido.
-        if (ballOwner >= 0 && ballOwner < RIVAL_OWNER_OFFSET) {
-            int owner = ballOwner;
-            int closest = findClosestRivalTo(teamX[owner], teamY[owner]);
-            float d = distance(rivalX[closest], rivalY[closest], teamX[owner], teamY[owner]);
-            if (d < playerRadius * 1.72f && rivalStun[closest] <= 0f && forceCooldown <= 0f) {
-                if (Math.random() < 0.010) {
-                    releaseBall((teamFacingX[owner] + rivalFacingX[closest]) * 0.5f,
-                            (teamFacingY[owner] + rivalFacingY[closest]) * 0.5f,
-                            Math.min(w, h) * 0.22f);
+    private void resolveOpposingPlayerCollisions() {
+        float minDist = playerRadius * 2f;
+        for (int t = 0; t < teamSize; t++) {
+            for (int r = 0; r < teamSize; r++) {
+                float dx = rivalX[r] - teamX[t];
+                float dy = rivalY[r] - teamY[t];
+                float d = length(dx, dy);
+                if (d <= 0.001f || d >= minDist) continue;
+
+                float nx = dx / d;
+                float ny = dy / d;
+                float overlap = minDist - d;
+
+                teamX[t] -= nx * overlap * 0.50f;
+                teamY[t] -= ny * overlap * 0.50f;
+                rivalX[r] += nx * overlap * 0.50f;
+                rivalY[r] += ny * overlap * 0.50f;
+                clampTeamPlayer(t);
+                clampRival(r);
+
+                if (collisionCooldown > 0f || possessionGrace > 0f) continue;
+
+                if (ballOwner == t && d < playerRadius * 1.68f) {
+                    loseBallFromCollision(false, t, r, -nx, -ny);
+                    return;
+                }
+                if (ballOwner == RIVAL_OWNER_OFFSET + r && d < playerRadius * 1.68f) {
+                    loseBallFromCollision(true, t, r, nx, ny);
+                    return;
                 }
             }
         }
     }
 
+    private void loseBallFromCollision(boolean rivalWasOwner, int teamIndex, int rivalIndex, float awayX, float awayY) {
+        float d = length(awayX, awayY);
+        if (d < 0.001f) {
+            awayX = rivalWasOwner ? 1f : -1f;
+            awayY = 0f;
+            d = 1f;
+        }
+        awayX /= d;
+        awayY /= d;
+
+        ballOwner = FREE_BALL;
+        pendingPassTarget = -1;
+        float sourceX = rivalWasOwner ? rivalX[rivalIndex] : teamX[teamIndex];
+        float sourceY = rivalWasOwner ? rivalY[rivalIndex] : teamY[teamIndex];
+        ballX = sourceX + awayX * (playerRadius + ballRadius + 2f);
+        ballY = sourceY + awayY * (playerRadius + ballRadius + 2f);
+        float looseSpeed = Math.min(w, h) * 0.32f;
+        ballVX = awayX * looseSpeed;
+        ballVY = awayY * looseSpeed;
+        collisionCooldown = 0.48f;
+        resolveBallBounds();
+    }
+
     private void updateKeepers(float dt) {
-        float keeperSpeed = Math.min(w, h) * 0.38f;
+        float keeperSpeed = basePlayerSpeed() * 0.90f;
         keeperLeftY = moveToward(keeperLeftY, ballY, keeperSpeed * dt);
         keeperRightY = moveToward(keeperRightY, ballY, keeperSpeed * dt);
         keeperLeftY = clamp(keeperLeftY, goalTop + playerRadius, goalBottom - playerRadius);
@@ -367,28 +406,36 @@ public class GameView extends View {
         ballX += ballVX * dt;
         ballY += ballVY * dt;
 
-        float friction = (float) Math.pow(0.26, dt);
+        float friction = (float) Math.pow(0.28, dt);
         ballVX *= friction;
         ballVY *= friction;
 
         resolveBallBounds();
         escapeCornerIfNeeded();
-
         resolveKeeperCollision(fieldLeft + playerRadius * 0.55f, keeperLeftY, true);
         resolveKeeperCollision(fieldRight - playerRadius * 0.55f, keeperRightY, false);
         resolveBallBounds();
     }
 
     private void tryAcquirePossession() {
-        float capture = playerRadius + ballRadius + playerRadius * 0.25f;
+        float capture = playerRadius + ballRadius + playerRadius * 0.30f;
         float speed = length(ballVX, ballVY);
-        float maxCaptureSpeed = Math.min(w, h) * 0.72f;
+        float maxCaptureSpeed = Math.min(w, h) * 1.25f;
+
+        if (pendingPassTarget >= 0 && pendingPassTarget < teamSize) {
+            float d = distance(teamX[pendingPassTarget], teamY[pendingPassTarget], ballX, ballY);
+            if (d < capture * 1.65f && speed < maxCaptureSpeed) {
+                giveTeamPossession(pendingPassTarget);
+                pendingPassTarget = -1;
+                return;
+            }
+        }
 
         int bestTeam = -1;
         float bestTeamDist = Float.MAX_VALUE;
         for (int i = 0; i < teamSize; i++) {
             float d = distance(teamX[i], teamY[i], ballX, ballY);
-            if (d < capture && d < bestTeamDist) {
+            if (d < bestTeamDist) {
                 bestTeamDist = d;
                 bestTeam = i;
             }
@@ -397,74 +444,69 @@ public class GameView extends View {
         int bestRival = -1;
         float bestRivalDist = Float.MAX_VALUE;
         for (int i = 0; i < teamSize; i++) {
-            if (rivalStun[i] > 0f) continue;
             float d = distance(rivalX[i], rivalY[i], ballX, ballY);
-            if (d < capture && d < bestRivalDist) {
+            if (d < bestRivalDist) {
                 bestRivalDist = d;
                 bestRival = i;
             }
         }
 
-        if (speed > maxCaptureSpeed && pendingPassTarget < 0) return;
+        if (speed > maxCaptureSpeed) return;
 
-        if (pendingPassTarget >= 0) {
-            float d = distance(teamX[pendingPassTarget], teamY[pendingPassTarget], ballX, ballY);
-            if (d < capture * 1.30f) {
-                ballOwner = pendingPassTarget;
-                controlledIndex = pendingPassTarget;
-                pendingPassTarget = -1;
-                ballVX = 0f;
-                ballVY = 0f;
-                return;
-            }
-        }
-
-        if (bestTeam >= 0 && (bestRival < 0 || bestTeamDist <= bestRivalDist)) {
-            ballOwner = bestTeam;
-            controlledIndex = bestTeam;
-            pendingPassTarget = -1;
-            ballVX = 0f;
-            ballVY = 0f;
-        } else if (bestRival >= 0) {
-            ballOwner = RIVAL_OWNER_OFFSET + bestRival;
-            pendingPassTarget = -1;
-            ballVX = 0f;
-            ballVY = 0f;
+        if (bestTeam >= 0 && bestTeamDist < capture &&
+                (bestRival < 0 || bestTeamDist <= bestRivalDist)) {
+            giveTeamPossession(bestTeam);
+        } else if (bestRival >= 0 && bestRivalDist < capture) {
+            giveRivalPossession(bestRival);
         }
     }
 
-    private void attachBallToOwner() {
-        float ox, oy, fx, fy;
-
-        if (ballOwner >= RIVAL_OWNER_OFFSET) {
-            int i = ballOwner - RIVAL_OWNER_OFFSET;
-            if (i < 0 || i >= teamSize || rivalStun[i] > 0f) {
-                ballOwner = FREE_BALL;
-                return;
-            }
-            ox = rivalX[i];
-            oy = rivalY[i];
-            fx = rivalFacingX[i];
-            fy = rivalFacingY[i];
-        } else {
-            int i = ballOwner;
-            if (i < 0 || i >= teamSize) {
-                ballOwner = FREE_BALL;
-                return;
-            }
-            ox = teamX[i];
-            oy = teamY[i];
-            fx = teamFacingX[i];
-            fy = teamFacingY[i];
-        }
-
-        float d = playerRadius + ballRadius * 0.72f;
-        ballX = ox + fx * d;
-        ballY = oy + fy * d;
+    private void giveTeamPossession(int index) {
+        ballOwner = index;
+        controlledIndex = index;
+        pendingPassTarget = -1;
         ballVX = 0f;
         ballVY = 0f;
+        possessionGrace = 0.24f;
+        attachBallToOwner();
+    }
 
-        // Mantiene la posesión visual dentro del campo, excepto frente a la portería.
+    private void giveRivalPossession(int index) {
+        ballOwner = RIVAL_OWNER_OFFSET + index;
+        pendingPassTarget = -1;
+        ballVX = 0f;
+        ballVY = 0f;
+        possessionGrace = 0.24f;
+        rivalFacingX[index] = -1f;
+        rivalFacingY[index] = 0f;
+        attachBallToOwner();
+    }
+
+    private void attachBallToOwner() {
+        float carryGap = playerRadius + ballRadius + 1f;
+
+        if (ballOwner >= 0 && ballOwner < RIVAL_OWNER_OFFSET) {
+            int i = ballOwner;
+            float fx = teamFacingX[i];
+            float fy = teamFacingY[i];
+            if (length(fx, fy) < 0.1f) { fx = 1f; fy = 0f; }
+            ballX = teamX[i] + fx * carryGap;
+            ballY = teamY[i] + fy * carryGap;
+        } else if (ballOwner >= RIVAL_OWNER_OFFSET) {
+            int i = ballOwner - RIVAL_OWNER_OFFSET;
+            if (i < 0 || i >= teamSize) return;
+            float fx = rivalFacingX[i];
+            float fy = rivalFacingY[i];
+            if (length(fx, fy) < 0.1f) { fx = -1f; fy = 0f; }
+            ballX = rivalX[i] + fx * carryGap;
+            ballY = rivalY[i] + fy * carryGap;
+        }
+        ballVX = 0f;
+        ballVY = 0f;
+        constrainAttachedBall();
+    }
+
+    private void constrainAttachedBall() {
         ballY = clamp(ballY, fieldTop + ballRadius, fieldBottom - ballRadius);
         boolean inGoalMouth = ballY >= goalTop && ballY <= goalBottom;
         if (!inGoalMouth) {
@@ -472,20 +514,26 @@ public class GameView extends View {
         }
     }
 
-    private void playerShoot() {
+    private void playerShootOrClear() {
         if (state != ScreenState.PLAYING) return;
 
-        if (ballOwner == controlledIndex) {
-            float targetY = h * 0.50f + teamFacingY[controlledIndex] * h * 0.12f;
-            kickBall(fieldRight + w * 0.08f, targetY, 1.20f);
-            return;
-        }
-
-        if (ballOwner == FREE_BALL &&
+        boolean owns = ballOwner == controlledIndex;
+        boolean looseAndClose = ballOwner == FREE_BALL &&
                 distance(teamX[controlledIndex], teamY[controlledIndex], ballX, ballY) <
-                        playerRadius + ballRadius + playerRadius * 0.7f) {
-            float targetY = h * 0.50f + teamFacingY[controlledIndex] * h * 0.12f;
-            kickBall(fieldRight + w * 0.08f, targetY, 1.15f);
+                        playerRadius + ballRadius + playerRadius * 0.75f;
+        if (!owns && !looseAndClose) return;
+
+        float midX = (fieldLeft + fieldRight) * 0.50f;
+        boolean inRivalHalf = teamX[controlledIndex] >= midX;
+
+        if (inRivalHalf) {
+            float targetY = clamp(h * 0.50f + teamFacingY[controlledIndex] * h * 0.10f,
+                    goalTop + ballRadius * 2f, goalBottom - ballRadius * 2f);
+            kickBall(fieldRight + w * 0.07f, targetY, 1.25f);
+        } else {
+            float targetY = clamp(teamY[controlledIndex] + teamFacingY[controlledIndex] * h * 0.18f,
+                    fieldTop + playerRadius * 2f, fieldBottom - playerRadius * 2f);
+            kickBall(fieldRight - w * 0.12f, targetY, 1.08f);
         }
     }
 
@@ -496,22 +544,42 @@ public class GameView extends View {
         if (target < 0) return;
 
         pendingPassTarget = target;
-        float tx = teamX[target] + teamFacingX[target] * playerRadius * 0.4f;
-        float ty = teamY[target] + teamFacingY[target] * playerRadius * 0.4f;
-        kickBall(tx, ty, 0.66f);
+        float dx = teamX[target] - ballX;
+        float dy = teamY[target] - ballY;
+        float d = Math.max(1f, length(dx, dy));
+
+        float scale = Math.min(w, h);
+        float speed = clamp(d * 2.35f, scale * 0.62f, scale * 1.32f);
+
+        float tx = teamX[target] + teamFacingX[target] * playerRadius * 0.75f;
+        float ty = teamY[target] + teamFacingY[target] * playerRadius * 0.75f;
+        releaseBallToward(tx, ty, speed);
     }
 
     private int choosePassTarget() {
-        int source = controlledIndex;
+        if (teamSize <= 1) return -1;
+        int from = controlledIndex;
+        float fx = teamFacingX[from];
+        float fy = teamFacingY[from];
+        float facingLen = length(fx, fy);
+        if (facingLen < 0.1f) { fx = 1f; fy = 0f; facingLen = 1f; }
+        fx /= facingLen;
+        fy /= facingLen;
+
         int best = -1;
-        float bestScore = Float.MAX_VALUE;
+        float bestScore = -Float.MAX_VALUE;
+        float fieldSpan = Math.max(1f, fieldRight - fieldLeft);
 
         for (int i = 0; i < teamSize; i++) {
-            if (i == source) continue;
-            float d = distance(teamX[source], teamY[source], teamX[i], teamY[i]);
-            float forwardBonus = (teamX[i] > teamX[source]) ? -playerRadius * 3f : 0f;
-            float score = d + forwardBonus;
-            if (score < bestScore) {
+            if (i == from) continue;
+            float dx = teamX[i] - teamX[from];
+            float dy = teamY[i] - teamY[from];
+            float d = Math.max(1f, length(dx, dy));
+            float dot = (dx / d) * fx + (dy / d) * fy;
+            float forwardBonus = dx / fieldSpan;
+            float distancePenalty = d / fieldSpan;
+            float score = dot * 1.8f + forwardBonus * 1.25f - distancePenalty * 0.55f;
+            if (score > bestScore) {
                 bestScore = score;
                 best = i;
             }
@@ -519,83 +587,37 @@ public class GameView extends View {
         return best;
     }
 
-    private void playerForce() {
-        if (state != ScreenState.PLAYING || forceCooldown > 0f) return;
-
-        int p = controlledIndex;
-        int target = findClosestRivalTo(teamX[p], teamY[p]);
-        float d = distance(teamX[p], teamY[p], rivalX[target], rivalY[target]);
-        float range = playerRadius * 2.45f;
-
-        if (d > range || rivalStun[target] > 0f) return;
-
-        float dx = rivalX[target] - teamX[p];
-        float dy = rivalY[target] - teamY[p];
-        float len = length(dx, dy);
-        if (len < 1f) {
-            dx = teamFacingX[p];
-            dy = teamFacingY[p];
-            len = 1f;
-        }
-        float nx = dx / len;
-        float ny = dy / len;
-
-        // El rival pierde estabilidad durante un instante y se desplaza hacia atrás.
-        rivalStun[target] = 0.85f;
-        rivalX[target] += nx * playerRadius * 0.75f;
-        rivalY[target] += ny * playerRadius * 0.75f;
-        clampRival(target);
-
-        if (ballOwner == RIVAL_OWNER_OFFSET + target) {
-            ballOwner = FREE_BALL;
-            pendingPassTarget = -1;
-            ballX = rivalX[target] - nx * (playerRadius + ballRadius);
-            ballY = rivalY[target] - ny * (playerRadius + ballRadius);
-            ballVX = -nx * Math.min(w, h) * 0.28f;
-            ballVY = -ny * Math.min(w, h) * 0.28f;
-            resolveBallBounds();
-        }
-
-        forceCooldown = 1.15f;
-    }
-
-    private void rivalWithBallBehavior(float dt) {
+    private void rivalWithBallBehavior() {
+        if (ballOwner < RIVAL_OWNER_OFFSET || rivalKickCooldown > 0f) return;
         int i = ballOwner - RIVAL_OWNER_OFFSET;
-        if (i < 0 || i >= teamSize || rivalStun[i] > 0f) return;
+        if (i < 0 || i >= teamSize) return;
 
-        boolean closeEnoughToShoot = rivalX[i] < w * 0.40f;
-        boolean facingGoal = rivalFacingX[i] < -0.35f;
+        float midX = (fieldLeft + fieldRight) * 0.50f;
+        boolean inOurHalf = rivalX[i] <= midX;
+        float distanceToGoal = rivalX[i] - fieldLeft;
 
-        if (closeEnoughToShoot && facingGoal && rivalKickCooldown <= 0f) {
-            float targetY = h * 0.50f + (rivalY[i] - h * 0.50f) * 0.25f;
-            kickBall(fieldLeft - w * 0.08f, targetY, 0.98f);
-            rivalKickCooldown = 0.85f;
+        if (inOurHalf && distanceToGoal < (fieldRight - fieldLeft) * 0.34f) {
+            float targetY = clamp(h * 0.50f + (rivalY[i] - h * 0.50f) * 0.18f,
+                    goalTop + ballRadius * 2f, goalBottom - ballRadius * 2f);
+            kickBall(fieldLeft - w * 0.07f, targetY, 1.15f);
+            rivalKickCooldown = 0.78f;
         }
     }
 
     private void kickBall(float tx, float ty, float power) {
+        float speed = Math.min(w, h) * 1.08f * power;
+        releaseBallToward(tx, ty, speed);
+    }
+
+    private void releaseBallToward(float tx, float ty, float speed) {
         float dx = tx - ballX;
         float dy = ty - ballY;
         float d = length(dx, dy);
-        if (d <= 0f) return;
-
+        if (d < 0.001f) { dx = 1f; dy = 0f; d = 1f; }
         ballOwner = FREE_BALL;
-        float speed = Math.min(w, h) * 1.18f * power;
-        ballVX = (dx / d) * speed;
-        ballVY = (dy / d) * speed;
-    }
-
-    private void releaseBall(float dx, float dy, float speed) {
-        float d = length(dx, dy);
-        if (d < 0.1f) {
-            dx = 1f;
-            dy = 0f;
-            d = 1f;
-        }
-        ballOwner = FREE_BALL;
-        pendingPassTarget = -1;
         ballVX = dx / d * speed;
         ballVY = dy / d * speed;
+        possessionGrace = 0f;
     }
 
     private void checkGoals() {
@@ -603,127 +625,38 @@ public class GameView extends View {
 
         if (ballX + ballRadius < fieldLeft && ballY >= goalTop && ballY <= goalBottom) {
             rivalScore++;
-            afterGoal(false);
+            if (goldenGoalPhase) {
+                state = ScreenState.GAME_OVER;
+            } else {
+                resetPositions();
+            }
             return;
         }
 
         if (ballX - ballRadius > fieldRight && ballY >= goalTop && ballY <= goalBottom) {
             playerScore++;
-            afterGoal(true);
-        }
-    }
-
-    private void afterGoal(boolean playerScored) {
-        if (goldenGoalPhase || (inExtraTime && goldenGoalEnabled)) {
-            state = ScreenState.GAME_OVER;
-            phaseLabel = "GOL DE ORO";
-            return;
-        }
-        resetPositions();
-    }
-
-    private boolean isClosestTeamToBall(int index) {
-        float d = distance(teamX[index], teamY[index], ballX, ballY);
-        for (int i = 0; i < teamSize; i++) {
-            if (i == index || i == controlledIndex) continue;
-            if (distance(teamX[i], teamY[i], ballX, ballY) < d) return false;
-        }
-        return true;
-    }
-
-    private int findClosestRivalToBallOrOwner() {
-        float tx = ballX;
-        float ty = ballY;
-
-        if (ballOwner >= 0 && ballOwner < RIVAL_OWNER_OFFSET) {
-            tx = teamX[ballOwner];
-            ty = teamY[ballOwner];
-        }
-
-        return findClosestRivalTo(tx, ty);
-    }
-
-    private int findClosestRivalTo(float x, float y) {
-        int best = 0;
-        float bestD = Float.MAX_VALUE;
-        for (int i = 0; i < teamSize; i++) {
-            if (rivalStun[i] > 0f) continue;
-            float d = distance(rivalX[i], rivalY[i], x, y);
-            if (d < bestD) {
-                bestD = d;
-                best = i;
+            if (goldenGoalPhase) {
+                state = ScreenState.GAME_OVER;
+            } else {
+                resetPositions();
             }
         }
-        return best;
-    }
-
-    private float[] teamFormationTarget(int i) {
-        float[] lanes = {0.50f, 0.27f, 0.73f, 0.40f, 0.60f};
-        float[] xs = {0.31f, 0.39f, 0.39f, 0.50f, 0.50f};
-        float shiftX = (ballX - w * 0.50f) * 0.18f;
-        return new float[]{
-                clamp(w * xs[i] + shiftX, fieldLeft + playerRadius, fieldRight - playerRadius),
-                h * lanes[i]
-        };
-    }
-
-    private float[] rivalFormationTarget(int i) {
-        float[] lanes = {0.50f, 0.27f, 0.73f, 0.40f, 0.60f};
-        float[] xs = {0.69f, 0.61f, 0.61f, 0.50f, 0.50f};
-        float shiftX = (ballX - w * 0.50f) * 0.18f;
-        return new float[]{
-                clamp(w * xs[i] + shiftX, fieldLeft + playerRadius, fieldRight - playerRadius),
-                h * lanes[i]
-        };
-    }
-
-    private void moveTeamPlayerToward(int i, float tx, float ty, float maxDelta) {
-        float dx = tx - teamX[i];
-        float dy = ty - teamY[i];
-        float d = length(dx, dy);
-        if (d < 1f) return;
-
-        float step = Math.min(maxDelta, d);
-        float nx = dx / d;
-        float ny = dy / d;
-        teamX[i] += nx * step;
-        teamY[i] += ny * step;
-        teamFacingX[i] = nx;
-        teamFacingY[i] = ny;
-        clampTeamPlayer(i);
-    }
-
-    private void moveRivalToward(int i, float tx, float ty, float maxDelta) {
-        float dx = tx - rivalX[i];
-        float dy = ty - rivalY[i];
-        float d = length(dx, dy);
-        if (d < 1f) return;
-
-        float step = Math.min(maxDelta, d);
-        float nx = dx / d;
-        float ny = dy / d;
-        rivalX[i] += nx * step;
-        rivalY[i] += ny * step;
-        rivalFacingX[i] = nx;
-        rivalFacingY[i] = ny;
-        clampRival(i);
     }
 
     private void resolveKeeperCollision(float kx, float ky, boolean leftKeeper) {
         float dx = ballX - kx;
         float dy = ballY - ky;
-        float dist = length(dx, dy);
-        float keeperRadius = playerRadius * 0.88f;
+        float d = length(dx, dy);
+        float keeperRadius = playerRadius * 0.90f;
         float minDist = keeperRadius + ballRadius;
-
-        if (dist > 0f && dist < minDist) {
-            float nx = dx / dist;
-            float ny = dy / dist;
+        if (d > 0f && d < minDist) {
+            float nx = dx / d;
+            float ny = dy / d;
             ballX = kx + nx * minDist;
             ballY = ky + ny * minDist;
-            float speed = Math.min(w, h) * 0.72f;
+            float speed = Math.min(w, h) * 0.78f;
             ballVX = (leftKeeper ? Math.abs(nx) : -Math.abs(nx)) * speed;
-            ballVY = ny * speed * 0.55f;
+            ballVY = ny * speed * 0.60f;
             ballOwner = FREE_BALL;
             pendingPassTarget = -1;
         }
@@ -757,16 +690,93 @@ public class GameView extends View {
         boolean inCorner = (nearLeft || nearRight) && (nearTop || nearBottom);
 
         float speed = length(ballVX, ballVY);
-        float slowSpeed = Math.min(w, h) * 0.12f;
-
-        if (inCorner && speed < slowSpeed) {
-            float escapeSpeed = Math.min(w, h) * 0.24f;
+        if (inCorner && speed < Math.min(w, h) * 0.13f) {
+            float escapeSpeed = Math.min(w, h) * 0.25f;
             ballVX = (nearLeft ? 1f : -1f) * escapeSpeed;
             ballVY = (nearTop ? 1f : -1f) * escapeSpeed * 0.72f;
-            float inset = ballRadius * 0.30f;
+            float inset = ballRadius * 0.25f;
             ballX += nearLeft ? inset : -inset;
             ballY += nearTop ? inset : -inset;
         }
+    }
+
+    private int findClosestRivalToBallOrOwner() {
+        float tx = ballX;
+        float ty = ballY;
+        if (ballOwner >= 0 && ballOwner < RIVAL_OWNER_OFFSET) {
+            tx = teamX[ballOwner];
+            ty = teamY[ballOwner];
+        }
+        return findClosestRivalTo(tx, ty);
+    }
+
+    private int findClosestRivalTo(float x, float y) {
+        int best = 0;
+        float bestD = Float.MAX_VALUE;
+        for (int i = 0; i < teamSize; i++) {
+            float d = distance(rivalX[i], rivalY[i], x, y);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    private boolean isClosestTeamToBall(int index) {
+        float d = distance(teamX[index], teamY[index], ballX, ballY);
+        for (int i = 0; i < teamSize; i++) {
+            if (i == index) continue;
+            if (distance(teamX[i], teamY[i], ballX, ballY) < d) return false;
+        }
+        return true;
+    }
+
+    private float[] teamFormationTarget(int i) {
+        float[] lanes = {0.50f, 0.27f, 0.73f, 0.40f, 0.60f};
+        float[] xs = {0.34f, 0.41f, 0.41f, 0.50f, 0.50f};
+        float ballShift = clamp((ballX - w * 0.50f) * 0.18f, -w * 0.06f, w * 0.08f);
+        return new float[]{w * xs[i] + ballShift, h * lanes[i]};
+    }
+
+    private float[] rivalFormationTarget(int i) {
+        float[] lanes = {0.50f, 0.27f, 0.73f, 0.40f, 0.60f};
+        float[] xs = {0.66f, 0.59f, 0.59f, 0.50f, 0.50f};
+        float ballShift = clamp((ballX - w * 0.50f) * 0.18f, -w * 0.08f, w * 0.06f);
+        return new float[]{w * xs[i] + ballShift, h * lanes[i]};
+    }
+
+    private void moveTeamPlayerToward(int i, float tx, float ty, float maxDelta) {
+        float dx = tx - teamX[i];
+        float dy = ty - teamY[i];
+        float d = length(dx, dy);
+        if (d <= 0.5f) return;
+        float step = Math.min(maxDelta, d);
+        float nx = dx / d;
+        float ny = dy / d;
+        teamX[i] += nx * step;
+        teamY[i] += ny * step;
+        teamFacingX[i] = nx;
+        teamFacingY[i] = ny;
+        clampTeamPlayer(i);
+    }
+
+    private void moveRivalToward(int i, float tx, float ty, float maxDelta) {
+        float dx = tx - rivalX[i];
+        float dy = ty - rivalY[i];
+        float d = length(dx, dy);
+        if (d <= 0.5f) {
+            if (ballOwner == RIVAL_OWNER_OFFSET + i) {
+                rivalFacingX[i] = -1f;
+                rivalFacingY[i] = 0f;
+            }
+            return;
+        }
+        float step = Math.min(maxDelta, d);
+        float nx = dx / d;
+        float ny = dy / d;
+        rivalX[i] += nx * step;
+        rivalY[i] += ny * step;
+        rivalFacingX[i] = nx;
+        rivalFacingY[i] = ny;
+        clampRival(i);
     }
 
     private void clampTeamPlayer(int i) {
@@ -787,8 +797,7 @@ public class GameView extends View {
         paint.setColor(Color.rgb(30, 145, 60));
         float stripe = (fieldRight - fieldLeft) / 8f;
         for (int i = 0; i < 8; i += 2) {
-            canvas.drawRect(fieldLeft + i * stripe, fieldTop,
-                    fieldLeft + (i + 1) * stripe, fieldBottom, paint);
+            canvas.drawRect(fieldLeft + i * stripe, fieldTop, fieldLeft + (i + 1) * stripe, fieldBottom, paint);
         }
 
         paint.setStyle(Paint.Style.STROKE);
@@ -799,53 +808,37 @@ public class GameView extends View {
         canvas.drawCircle(w * 0.50f, h * 0.50f, Math.min(w, h) * 0.105f, paint);
 
         float areaW = (fieldRight - fieldLeft) * 0.16f;
-        float areaTop = h * 0.29f;
-        float areaBottom = h * 0.71f;
-        canvas.drawRect(fieldLeft, areaTop, fieldLeft + areaW, areaBottom, paint);
-        canvas.drawRect(fieldRight - areaW, areaTop, fieldRight, areaBottom, paint);
+        canvas.drawRect(fieldLeft, h * 0.29f, fieldLeft + areaW, h * 0.71f, paint);
+        canvas.drawRect(fieldRight - areaW, h * 0.29f, fieldRight, h * 0.71f, paint);
 
         float goalDepth = w * 0.035f;
         canvas.drawRect(fieldLeft - goalDepth, goalTop, fieldLeft, goalBottom, paint);
         canvas.drawRect(fieldRight, goalTop, fieldRight + goalDepth, goalBottom, paint);
-
         paint.setStyle(Paint.Style.FILL);
         canvas.drawCircle(w * 0.50f, h * 0.50f, 5f, paint);
     }
 
     private void drawEntities(Canvas canvas) {
         for (int i = 0; i < teamSize; i++) {
-            boolean controlled = i == controlledIndex;
-            paint.setColor(controlled ? Color.rgb(35, 110, 255) : Color.rgb(70, 155, 255));
-            canvas.drawCircle(teamX[i], teamY[i], playerRadius, paint);
-
-            if (controlled) {
+            if (i == controlledIndex) {
                 paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(Math.max(3f, playerRadius * 0.14f));
+                paint.setStrokeWidth(Math.max(3f, playerRadius * 0.16f));
                 paint.setColor(Color.WHITE);
-                canvas.drawCircle(teamX[i], teamY[i], playerRadius * 1.18f, paint);
+                canvas.drawCircle(teamX[i], teamY[i], playerRadius * 1.23f, paint);
                 paint.setStyle(Paint.Style.FILL);
             }
-
-            paint.setColor(Color.WHITE);
-            paint.setTextAlign(Paint.Align.CENTER);
-            paint.setTextSize(playerRadius * 0.75f);
-            paint.setFakeBoldText(true);
-            canvas.drawText(String.valueOf(i + 7), teamX[i], teamY[i] + playerRadius * 0.26f, paint);
+            paint.setColor(Color.rgb(35, 110, 255));
+            canvas.drawCircle(teamX[i], teamY[i], playerRadius, paint);
+            drawNumber(canvas, String.valueOf(i + 1), teamX[i], teamY[i]);
         }
 
         for (int i = 0; i < teamSize; i++) {
-            paint.setColor(rivalStun[i] > 0f ? Color.rgb(155, 75, 75) : Color.rgb(235, 65, 65));
+            paint.setColor(Color.rgb(235, 65, 65));
             canvas.drawCircle(rivalX[i], rivalY[i], playerRadius, paint);
-            paint.setColor(Color.WHITE);
-            canvas.drawText(String.valueOf(i + 7), rivalX[i], rivalY[i] + playerRadius * 0.26f, paint);
-
-            if (rivalStun[i] > 0f) {
-                paint.setTextSize(playerRadius * 0.72f);
-                canvas.drawText("★", rivalX[i], rivalY[i] - playerRadius * 1.15f, paint);
-            }
+            drawNumber(canvas, String.valueOf(i + 1), rivalX[i], rivalY[i]);
         }
 
-        float keeperRadius = playerRadius * 0.88f;
+        float keeperRadius = playerRadius * 0.90f;
         paint.setColor(Color.rgb(255, 196, 0));
         canvas.drawCircle(fieldLeft + playerRadius * 0.55f, keeperLeftY, keeperRadius, paint);
         paint.setColor(Color.rgb(255, 145, 0));
@@ -859,25 +852,32 @@ public class GameView extends View {
         canvas.drawCircle(ballX, ballY, ballRadius, paint);
         paint.setStyle(Paint.Style.FILL);
         canvas.drawCircle(ballX, ballY, ballRadius * 0.28f, paint);
+    }
 
+    private void drawNumber(Canvas canvas, String number, float x, float y) {
+        paint.setColor(Color.WHITE);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setFakeBoldText(true);
+        paint.setTextSize(playerRadius * 0.85f);
+        canvas.drawText(number, x, y + playerRadius * 0.30f, paint);
         paint.setFakeBoldText(false);
     }
 
     private void drawHud(Canvas canvas) {
         paint.setTextAlign(Paint.Align.CENTER);
-        paint.setFakeBoldText(true);
         paint.setColor(Color.WHITE);
-        paint.setTextSize(Math.max(23f, h * 0.050f));
-        canvas.drawText(playerScore + "  -  " + rivalScore, w * 0.50f, h * 0.055f, paint);
+        paint.setFakeBoldText(true);
+        paint.setTextSize(Math.max(24f, h * 0.052f));
+        canvas.drawText(playerScore + "  -  " + rivalScore, w * 0.50f, h * 0.06f, paint);
 
-        paint.setTextSize(Math.max(14f, h * 0.027f));
-        String timeText = goldenGoalPhase ? "SIN LÍMITE" : ((int) Math.ceil(matchTime)) + " s";
-        canvas.drawText(phaseLabel + " · " + timeText, w * 0.50f, h * 0.095f, paint);
+        paint.setTextSize(Math.max(16f, h * 0.030f));
+        String timeText = goldenGoalPhase ? "∞" : ((int) Math.ceil(matchTime)) + " s";
+        canvas.drawText(phaseLabel + " · " + timeText, w * 0.50f, h * 0.105f, paint);
         paint.setFakeBoldText(false);
     }
 
     private void drawControls(Canvas canvas) {
-        paint.setColor(Color.argb(105, 255, 255, 255));
+        paint.setColor(Color.argb(110, 255, 255, 255));
         canvas.drawCircle(joystickCX, joystickCY, joystickRadius, paint);
         paint.setColor(Color.argb(190, 255, 255, 255));
         canvas.drawCircle(
@@ -887,12 +887,11 @@ public class GameView extends View {
                 paint
         );
 
-        drawActionButton(canvas, shootCX, shootCY, "TIRO", Color.rgb(235, 70, 65),
-                1f);
+        boolean inRivalHalf = teamX[controlledIndex] >= (fieldLeft + fieldRight) * 0.50f;
+        String shootText = inRivalHalf ? "TIRO" : "DESPEJE";
+        drawActionButton(canvas, shootCX, shootCY, shootText, Color.rgb(235, 70, 65), 1f);
         drawActionButton(canvas, passCX, passCY, "PASE", Color.rgb(55, 125, 245),
                 teamSize > 1 ? 1f : 0.42f);
-        drawActionButton(canvas, forceCX, forceCY, "FUERZA", Color.rgb(245, 155, 45),
-                forceCooldown <= 0f ? 1f : 0.45f);
     }
 
     private void drawActionButton(Canvas canvas, float cx, float cy, String text, int color, float alphaFactor) {
@@ -902,100 +901,61 @@ public class GameView extends View {
         paint.setColor(Color.WHITE);
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setFakeBoldText(true);
-        paint.setTextSize(Math.max(13f, actionRadius * 0.34f));
-        canvas.drawText(text, cx, cy + actionRadius * 0.12f, paint);
+        paint.setTextSize(Math.max(14f, actionRadius * 0.34f));
+        canvas.drawText(text, cx, cy + actionRadius * 0.13f, paint);
         paint.setFakeBoldText(false);
     }
 
     private void drawMenu(Canvas canvas) {
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.rgb(12, 70, 32));
+        paint.setColor(Color.rgb(18, 76, 36));
         canvas.drawRect(0, 0, w, h, paint);
 
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setColor(Color.WHITE);
         paint.setFakeBoldText(true);
-        paint.setTextSize(Math.max(32f, h * 0.070f));
-        canvas.drawText("FÚTBOL OFFLINE", w * 0.50f, h * 0.14f, paint);
-
-        paint.setTextSize(Math.max(15f, h * 0.029f));
+        paint.setTextSize(Math.max(34f, h * 0.075f));
+        canvas.drawText("FÚTBOL OFFLINE", w * 0.50f, h * 0.16f, paint);
         paint.setFakeBoldText(false);
-        canvas.drawText("Configura el partido", w * 0.50f, h * 0.20f, paint);
 
-        drawStepperRow(canvas, "Tiempo", configuredMatchSeconds + " s",
-                timeMinusRect, timePlusRect, h * 0.30f);
-        drawToggleRow(canvas, "Prórroga", extraTimeEnabled, extraRect);
-        drawToggleRow(canvas, "Gol de oro", goldenGoalEnabled, goldenRect);
-        drawStepperRow(canvas, "Jugadores de campo", configuredTeamSize + " vs " + configuredTeamSize,
+        drawSettingRow(canvas, "TIEMPO", configuredMatchSeconds + " s", timeMinusRect, timePlusRect, h * 0.30f);
+        drawToggleRow(canvas, "PRÓRROGA", extraTimeEnabled, extraRect);
+        drawToggleRow(canvas, "GOL DE ORO", goldenGoalEnabled, goldenRect);
+        drawSettingRow(canvas, "JUGADORES", configuredTeamSize + " vs " + configuredTeamSize,
                 playersMinusRect, playersPlusRect, h * 0.64f);
 
-        paint.setColor(Color.argb(215, 35, 125, 255));
+        paint.setColor(Color.rgb(35, 125, 255));
         canvas.drawRoundRect(startRect, 24f, 24f, paint);
         paint.setColor(Color.WHITE);
         paint.setFakeBoldText(true);
-        paint.setTextSize(Math.max(21f, h * 0.040f));
+        paint.setTextSize(Math.max(20f, h * 0.042f));
         canvas.drawText("JUGAR", startRect.centerX(), startRect.centerY() + h * 0.014f, paint);
-
         paint.setFakeBoldText(false);
-        paint.setTextSize(Math.max(11f, h * 0.020f));
-        paint.setColor(Color.argb(205, 255, 255, 255));
-        canvas.drawText("Máximo 5 jugadores de campo por equipo · arqueros aparte",
-                w * 0.50f, h * 0.93f, paint);
     }
 
-    private void drawStepperRow(Canvas canvas, String label, String value, RectF minus, RectF plus, float top) {
-        float rowLeft = w * 0.19f;
-        float rowRight = w * 0.81f;
-        float rowBottom = top + h * 0.085f;
-
-        paint.setColor(Color.argb(75, 255, 255, 255));
-        canvas.drawRoundRect(new RectF(rowLeft, top, rowRight, rowBottom), 18f, 18f, paint);
-
-        drawSmallMenuButton(canvas, minus, "−");
-        drawSmallMenuButton(canvas, plus, "+");
-
+    private void drawSettingRow(Canvas canvas, String label, String value, RectF minus, RectF plus, float y) {
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setColor(Color.WHITE);
-        paint.setFakeBoldText(true);
-        paint.setTextSize(Math.max(15f, h * 0.027f));
-        canvas.drawText(label, w * 0.40f, top + h * 0.035f, paint);
-        paint.setTextSize(Math.max(14f, h * 0.025f));
-        canvas.drawText(value, w * 0.57f, top + h * 0.058f, paint);
-        paint.setFakeBoldText(false);
+        paint.setTextSize(Math.max(18f, h * 0.035f));
+        canvas.drawText(label + "   " + value, w * 0.50f, y - h * 0.018f, paint);
+        drawSmallButton(canvas, minus, "−");
+        drawSmallButton(canvas, plus, "+");
     }
 
     private void drawToggleRow(Canvas canvas, String label, boolean enabled, RectF rect) {
-        paint.setColor(Color.argb(75, 255, 255, 255));
-        canvas.drawRoundRect(rect, 18f, 18f, paint);
-
-        paint.setTextAlign(Paint.Align.LEFT);
+        paint.setColor(enabled ? Color.rgb(35, 145, 75) : Color.rgb(75, 85, 85));
+        canvas.drawRoundRect(rect, 20f, 20f, paint);
+        paint.setTextAlign(Paint.Align.CENTER);
         paint.setColor(Color.WHITE);
-        paint.setFakeBoldText(true);
-        paint.setTextSize(Math.max(15f, h * 0.028f));
-        canvas.drawText(label, rect.left + w * 0.035f, rect.centerY() + h * 0.010f, paint);
-
-        float toggleW = w * 0.115f;
-        float toggleH = h * 0.047f;
-        RectF toggle = new RectF(rect.right - toggleW - w * 0.025f,
-                rect.centerY() - toggleH / 2f,
-                rect.right - w * 0.025f,
-                rect.centerY() + toggleH / 2f);
-
-        paint.setColor(enabled ? Color.rgb(45, 185, 85) : Color.rgb(105, 105, 105));
-        canvas.drawRoundRect(toggle, toggleH / 2f, toggleH / 2f, paint);
-        float knobX = enabled ? toggle.right - toggleH / 2f : toggle.left + toggleH / 2f;
-        paint.setColor(Color.WHITE);
-        canvas.drawCircle(knobX, toggle.centerY(), toggleH * 0.36f, paint);
-        paint.setFakeBoldText(false);
+        paint.setTextSize(Math.max(18f, h * 0.034f));
+        canvas.drawText(label + "   " + (enabled ? "SÍ" : "NO"), rect.centerX(), rect.centerY() + h * 0.011f, paint);
     }
 
-    private void drawSmallMenuButton(Canvas canvas, RectF rect, String text) {
-        paint.setColor(Color.argb(205, 35, 125, 255));
+    private void drawSmallButton(Canvas canvas, RectF rect, String text) {
+        paint.setColor(Color.rgb(55, 105, 175));
         canvas.drawRoundRect(rect, 16f, 16f, paint);
         paint.setColor(Color.WHITE);
-        paint.setTextAlign(Paint.Align.CENTER);
         paint.setFakeBoldText(true);
-        paint.setTextSize(Math.max(20f, h * 0.040f));
+        paint.setTextSize(Math.max(22f, h * 0.045f));
         canvas.drawText(text, rect.centerX(), rect.centerY() + h * 0.014f, paint);
         paint.setFakeBoldText(false);
     }
@@ -1004,29 +964,23 @@ public class GameView extends View {
         paint.setColor(Color.argb(180, 0, 0, 0));
         canvas.drawRect(0, 0, w, h, paint);
 
-        String result;
-        if (playerScore > rivalScore) result = "¡GANASTE!";
-        else if (playerScore < rivalScore) result = "PERDISTE";
-        else result = "EMPATE";
-
+        String result = playerScore > rivalScore ? "¡GANASTE!" : (playerScore < rivalScore ? "PERDISTE" : "EMPATE");
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setColor(Color.WHITE);
         paint.setFakeBoldText(true);
-        paint.setTextSize(Math.max(34f, h * 0.080f));
-        canvas.drawText(result, w * 0.50f, h * 0.40f, paint);
-
+        paint.setTextSize(Math.max(36f, h * 0.085f));
+        canvas.drawText(result, w * 0.50f, h * 0.43f, paint);
         paint.setTextSize(Math.max(25f, h * 0.050f));
-        canvas.drawText(playerScore + " - " + rivalScore, w * 0.50f, h * 0.50f, paint);
+        canvas.drawText(playerScore + " - " + rivalScore, w * 0.50f, h * 0.52f, paint);
 
         paint.setColor(Color.rgb(35, 125, 255));
         canvas.drawRoundRect(restartRect, 20f, 20f, paint);
-        paint.setColor(Color.rgb(70, 70, 70));
+        paint.setColor(Color.rgb(70, 95, 105));
         canvas.drawRoundRect(menuRect, 20f, 20f, paint);
-
         paint.setColor(Color.WHITE);
-        paint.setTextSize(Math.max(15f, h * 0.028f));
-        canvas.drawText("REINICIAR", restartRect.centerX(), restartRect.centerY() + h * 0.010f, paint);
-        canvas.drawText("MENÚ", menuRect.centerX(), menuRect.centerY() + h * 0.010f, paint);
+        paint.setTextSize(Math.max(16f, h * 0.032f));
+        canvas.drawText("REINICIAR", restartRect.centerX(), restartRect.centerY() + h * 0.011f, paint);
+        canvas.drawText("MENÚ", menuRect.centerX(), menuRect.centerY() + h * 0.011f, paint);
         paint.setFakeBoldText(false);
     }
 
@@ -1035,47 +989,42 @@ public class GameView extends View {
         int action = event.getActionMasked();
         int actionIndex = event.getActionIndex();
 
+        if (state == ScreenState.MENU) {
+            if (action == MotionEvent.ACTION_DOWN) {
+                handleMenuTap(event.getX(actionIndex), event.getY(actionIndex));
+            }
+            return true;
+        }
+
+        if (state == ScreenState.GAME_OVER) {
+            if (action == MotionEvent.ACTION_DOWN) {
+                float x = event.getX(actionIndex);
+                float y = event.getY(actionIndex);
+                if (restartRect.contains(x, y)) restartMatch();
+                else if (menuRect.contains(x, y)) { state = ScreenState.MENU; invalidate(); }
+            }
+            return true;
+        }
+
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             float x = event.getX(actionIndex);
             float y = event.getY(actionIndex);
             int pointerId = event.getPointerId(actionIndex);
 
-            if (state == ScreenState.MENU) {
-                handleMenuTouch(x, y);
-                return true;
-            }
-
-            if (state == ScreenState.GAME_OVER) {
-                if (restartRect.contains(x, y)) {
-                    restartMatch();
-                } else if (menuRect.contains(x, y)) {
-                    state = ScreenState.MENU;
-                    invalidate();
-                }
-                return true;
-            }
-
-            if (distance(x, y, joystickCX, joystickCY) <= joystickRadius * 1.28f &&
-                    joystickPointerId == -1) {
+            if (distance(x, y, joystickCX, joystickCY) <= joystickRadius * 1.28f && joystickPointerId == -1) {
                 joystickPointerId = pointerId;
                 updateJoystick(x, y);
             } else if (distance(x, y, shootCX, shootCY) <= actionRadius * 1.32f) {
-                playerShoot();
+                playerShootOrClear();
             } else if (distance(x, y, passCX, passCY) <= actionRadius * 1.32f) {
                 playerPass();
-            } else if (distance(x, y, forceCX, forceCY) <= actionRadius * 1.32f) {
-                playerForce();
             }
         } else if (action == MotionEvent.ACTION_MOVE) {
             if (joystickPointerId != -1) {
                 int index = event.findPointerIndex(joystickPointerId);
-                if (index >= 0) {
-                    updateJoystick(event.getX(index), event.getY(index));
-                }
+                if (index >= 0) updateJoystick(event.getX(index), event.getY(index));
             }
-        } else if (action == MotionEvent.ACTION_UP ||
-                action == MotionEvent.ACTION_POINTER_UP ||
-                action == MotionEvent.ACTION_CANCEL) {
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_CANCEL) {
             int pointerId = event.getPointerId(actionIndex);
             if (pointerId == joystickPointerId || action == MotionEvent.ACTION_CANCEL) {
                 joystickPointerId = -1;
@@ -1083,27 +1032,17 @@ public class GameView extends View {
                 joystickDY = 0f;
             }
         }
-
         return true;
     }
 
-    private void handleMenuTouch(float x, float y) {
-        if (timeMinusRect.contains(x, y)) {
-            configuredMatchSeconds = Math.max(30, configuredMatchSeconds - 30);
-        } else if (timePlusRect.contains(x, y)) {
-            configuredMatchSeconds = Math.min(300, configuredMatchSeconds + 30);
-        } else if (extraRect.contains(x, y)) {
-            extraTimeEnabled = !extraTimeEnabled;
-        } else if (goldenRect.contains(x, y)) {
-            goldenGoalEnabled = !goldenGoalEnabled;
-        } else if (playersMinusRect.contains(x, y)) {
-            configuredTeamSize = Math.max(1, configuredTeamSize - 1);
-        } else if (playersPlusRect.contains(x, y)) {
-            configuredTeamSize = Math.min(MAX_PLAYERS, configuredTeamSize + 1);
-        } else if (startRect.contains(x, y)) {
-            startMatch();
-            return;
-        }
+    private void handleMenuTap(float x, float y) {
+        if (timeMinusRect.contains(x, y)) configuredMatchSeconds = Math.max(30, configuredMatchSeconds - 30);
+        else if (timePlusRect.contains(x, y)) configuredMatchSeconds = Math.min(300, configuredMatchSeconds + 30);
+        else if (playersMinusRect.contains(x, y)) configuredTeamSize = Math.max(1, configuredTeamSize - 1);
+        else if (playersPlusRect.contains(x, y)) configuredTeamSize = Math.min(MAX_PLAYERS, configuredTeamSize + 1);
+        else if (extraRect.contains(x, y)) extraTimeEnabled = !extraTimeEnabled;
+        else if (goldenRect.contains(x, y)) goldenGoalEnabled = !goldenGoalEnabled;
+        else if (startRect.contains(x, y)) { startMatch(); return; }
         invalidate();
     }
 
@@ -1111,16 +1050,14 @@ public class GameView extends View {
         float dx = x - joystickCX;
         float dy = y - joystickCY;
         float d = length(dx, dy);
-
         if (d <= 1f) {
             joystickDX = 0f;
             joystickDY = 0f;
             return;
         }
-
         float magnitude = Math.min(1f, d / joystickRadius);
-        joystickDX = (dx / d) * magnitude;
-        joystickDY = (dy / d) * magnitude;
+        joystickDX = dx / d * magnitude;
+        joystickDY = dy / d * magnitude;
     }
 
     private static float moveToward(float current, float target, float maxDelta) {
